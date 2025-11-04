@@ -851,24 +851,24 @@ namespace inja {
  * \brief Class for lexer configuration.
  */
 struct LexerConfig {
-  std::string statement_open {"{%"};
-  std::string statement_open_no_lstrip {"{%+"};
-  std::string statement_open_force_lstrip {"{%-"};
-  std::string statement_close {"%}"};
-  std::string statement_close_force_rstrip {"-%}"};
-  std::string line_statement {"##"};
-  std::string expression_open {"{{"};
-  std::string expression_open_force_lstrip {"{{-"};
-  std::string expression_close {"}}"};
-  std::string expression_close_force_rstrip {"-}}"};
-  std::string comment_open {"{#"};
-  std::string comment_open_force_lstrip {"{#-"};
-  std::string comment_close {"#}"};
-  std::string comment_close_force_rstrip {"-#}"};
-  std::string open_chars {"#{"};
+  std::string statement_open{"{%"};
+  std::string statement_open_no_lstrip{"{%+"};
+  std::string statement_open_force_lstrip{"{%-"};
+  std::string statement_close{"%}"};
+  std::string statement_close_force_rstrip{"-%}"};
+  std::string line_statement{"##"};
+  std::string expression_open{"{{"};
+  std::string expression_open_force_lstrip{"{{-"};
+  std::string expression_close{"}}"};
+  std::string expression_close_force_rstrip{"-}}"};
+  std::string comment_open{"{#"};
+  std::string comment_open_force_lstrip{"{#-"};
+  std::string comment_close{"#}"};
+  std::string comment_close_force_rstrip{"-#}"};
+  std::string open_chars{"#{"};
 
-  bool trim_blocks {false};
-  bool lstrip_blocks {false};
+  bool trim_blocks{false};
+  bool lstrip_blocks{false};
 
   void update_open_chars() {
     open_chars = "";
@@ -903,7 +903,7 @@ struct LexerConfig {
  * \brief Class for parser configuration.
  */
 struct ParserConfig {
-  bool search_included_templates_in_files {true};
+  bool search_included_templates_in_files{true};
 
   std::function<Template(const std::filesystem::path&, const std::string&)> include_callback;
 };
@@ -912,8 +912,9 @@ struct ParserConfig {
  * \brief Class for render configuration.
  */
 struct RenderConfig {
-  bool throw_at_missing_includes {true};
-  bool html_autoescape {false};
+  bool ignore_missing_variables{false};
+  bool throw_at_missing_includes{true};
+  bool html_autoescape{false};
 };
 
 } // namespace inja
@@ -2246,6 +2247,11 @@ class Renderer : public NodeVisitor {
       *output_stream << value->get<const json::number_unsigned_t>();
     } else if (value->is_number_integer()) {
       *output_stream << value->get<const json::number_integer_t>();
+    } else if (value->is_number_float()) {
+      // Use a stringstream to format the number without trailing zeros
+      std::ostringstream out;
+      out << std::noshowpoint << value->get<const json::number_float_t>();
+      *output_stream << out.str();
     } else if (value->is_null()) {
     } else {
       *output_stream << value->dump();
@@ -2276,7 +2282,12 @@ class Renderer : public NodeVisitor {
       const auto node = not_found_stack.top();
       not_found_stack.pop();
 
-      throw_renderer_error("variable '" + static_cast<std::string>(node->name) + "' not found", *node);
+      if (!config.ignore_missing_variables) {
+        throw_renderer_error("variable '" + static_cast<std::string>(node->name) + "' not found", *node);
+      } else {
+        std::string varText = static_cast<std::string>(node->name);
+        return std::make_shared<json>("{{" + varText + "}}");
+      }
     }
     return std::make_shared<json>(*result);
   }
@@ -2315,7 +2326,14 @@ class Renderer : public NodeVisitor {
         not_found_stack.pop();
 
         if (throw_not_found) {
-          throw_renderer_error("variable '" + static_cast<std::string>(data_node->name) + "' not found", *data_node);
+          if (!config.ignore_missing_variables) {
+            throw_renderer_error("variable '" + static_cast<std::string>(data_node->name) + "' not found", *data_node);
+          } else {
+            std::string varText = "{{" + static_cast<std::string>(data_node->name) + "}}";
+            auto var_result = std::make_shared<json>(varText);
+            result[N - i - 1] = var_result.get();
+            data_tmp_stack.push_back(var_result);
+          }
         }
       }
     }
@@ -2342,7 +2360,14 @@ class Renderer : public NodeVisitor {
         not_found_stack.pop();
 
         if (throw_not_found) {
-          throw_renderer_error("variable '" + static_cast<std::string>(data_node->name) + "' not found", *data_node);
+          if (!config.ignore_missing_variables) {
+            throw_renderer_error("variable '" + static_cast<std::string>(data_node->name) + "' not found", *data_node);
+          } else {
+            std::string varText = "{{" + static_cast<std::string>(data_node->name) + "}}";
+            auto var_result = std::make_shared<json>(varText);
+            result[N - i - 1] = var_result.get();
+            data_tmp_stack.push_back(var_result);
+          }
         }
       }
     }
@@ -2431,16 +2456,59 @@ class Renderer : public NodeVisitor {
     } break;
     case Op::Add: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+      if (config.ignore_missing_variables &&
+          ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+           (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+        // Extract variable names and reconstruct the expression
+        std::string arg0 = args[0]->is_string() ? 
+            args[0]->get_ref<const json::string_t&>().substr(2, args[0]->get_ref<const json::string_t&>().length() - 4) :
+            args[0]->is_number_integer() ? std::to_string(args[0]->get<json::number_integer_t>()) :
+            std::to_string(args[0]->get<double>());
+        std::string arg1 = args[1]->is_string() ? 
+            args[1]->get_ref<const json::string_t&>().substr(2, args[1]->get_ref<const json::string_t&>().length() - 4) :
+            args[1]->is_number_integer() ? std::to_string(args[1]->get<json::number_integer_t>()) :
+            std::to_string(args[1]->get<double>());
+            
+        make_result("{{" + arg0 + " + " + arg1 + "}}");
+        break;
+      }
+
       if (args[0]->is_string() && args[1]->is_string()) {
         make_result(args[0]->get_ref<const json::string_t&>() + args[1]->get_ref<const json::string_t&>());
       } else if (args[0]->is_number_integer() && args[1]->is_number_integer()) {
         make_result(args[0]->get<const json::number_integer_t>() + args[1]->get<const json::number_integer_t>());
+      } else if (args[0]->is_number() && args[1]->is_number()) {
+        // Check if result would be effectively integer
+        double res = args[0]->get<double>() + args[1]->get<double>();
+        if (std::abs(res - std::round(res)) < 1e-10) {
+          make_result(static_cast<json::number_integer_t>(std::round(res)));
+        } else {
+          make_result(res);
+        }
       } else {
-        make_result(args[0]->get<const json::number_float_t>() + args[1]->get<const json::number_float_t>());
+        throw_renderer_error("cannot add values of different types", node);
       }
     } break;
     case Op::Subtract: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+        if (config.ignore_missing_variables &&
+            ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+             (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+          std::string varText = "{{";
+          std::string arg0 =
+              args[0]->is_string() ? args[0]->get_ref<const json::string_t&>() : std::to_string(args[0]->get<double>());
+          std::string arg1 =
+              args[1]->is_string() ? args[1]->get_ref<const json::string_t&>() : std::to_string(args[1]->get<double>());
+          if (arg0.find("{{") == 0)
+            arg0 = arg0.substr(2, arg0.length() - 4);
+          if (arg1.find("{{") == 0)
+            arg1 = arg1.substr(2, arg1.length() - 4);
+          make_result("{{" + arg0 + " - " + arg1 + "}}");
+          break;
+        }
+
       if (args[0]->is_number_integer() && args[1]->is_number_integer()) {
         make_result(args[0]->get<const json::number_integer_t>() - args[1]->get<const json::number_integer_t>());
       } else {
@@ -2449,6 +2517,22 @@ class Renderer : public NodeVisitor {
     } break;
     case Op::Multiplication: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+        if (config.ignore_missing_variables &&
+            ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+             (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+          std::string arg0 =
+              args[0]->is_string() ? args[0]->get_ref<const json::string_t&>() : std::to_string(args[0]->get<double>());
+          std::string arg1 =
+              args[1]->is_string() ? args[1]->get_ref<const json::string_t&>() : std::to_string(args[1]->get<double>());
+          if (arg0.find("{{") == 0)
+            arg0 = arg0.substr(2, arg0.length() - 4);
+          if (arg1.find("{{") == 0)
+            arg1 = arg1.substr(2, arg1.length() - 4);
+          make_result("{{" + arg0 + " * " + arg1 + "}}");
+          break;
+        }
+
       if (args[0]->is_number_integer() && args[1]->is_number_integer()) {
         make_result(args[0]->get<const json::number_integer_t>() * args[1]->get<const json::number_integer_t>());
       } else {
@@ -2457,6 +2541,22 @@ class Renderer : public NodeVisitor {
     } break;
     case Op::Division: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+        if (config.ignore_missing_variables &&
+            ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+             (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+          std::string arg0 =
+              args[0]->is_string() ? args[0]->get_ref<const json::string_t&>() : std::to_string(args[0]->get<double>());
+          std::string arg1 =
+              args[1]->is_string() ? args[1]->get_ref<const json::string_t&>() : std::to_string(args[1]->get<double>());
+          if (arg0.find("{{") == 0)
+            arg0 = arg0.substr(2, arg0.length() - 4);
+          if (arg1.find("{{") == 0)
+            arg1 = arg1.substr(2, arg1.length() - 4);
+          make_result("{{" + arg0 + " / " + arg1 + "}}");
+          break;
+        }
+
       if (args[1]->get<const json::number_float_t>() == 0) {
         throw_renderer_error("division by zero", node);
       }
@@ -2464,6 +2564,22 @@ class Renderer : public NodeVisitor {
     } break;
     case Op::Power: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+        if (config.ignore_missing_variables &&
+            ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+             (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+          std::string arg0 =
+              args[0]->is_string() ? args[0]->get_ref<const json::string_t&>() : std::to_string(args[0]->get<double>());
+          std::string arg1 =
+              args[1]->is_string() ? args[1]->get_ref<const json::string_t&>() : std::to_string(args[1]->get<double>());
+          if (arg0.find("{{") == 0)
+            arg0 = arg0.substr(2, arg0.length() - 4);
+          if (arg1.find("{{") == 0)
+            arg1 = arg1.substr(2, arg1.length() - 4);
+          make_result("{{" + arg0 + " ^ " + arg1 + "}}");
+          break;
+        }
+
       if (args[0]->is_number_integer() && args[1]->get<const json::number_integer_t>() >= 0) {
         const auto result = static_cast<json::number_integer_t>(std::pow(args[0]->get<const json::number_integer_t>(), args[1]->get<const json::number_integer_t>()));
         make_result(result);
@@ -2474,6 +2590,22 @@ class Renderer : public NodeVisitor {
     } break;
     case Op::Modulo: {
       const auto args = get_arguments<2>(node);
+      // If either argument is a string that looks like {{variable}} and we're ignoring missing variables
+        if (config.ignore_missing_variables &&
+            ((args[0]->is_string() && args[0]->get_ref<const json::string_t&>().find("{{") == 0) ||
+             (args[1]->is_string() && args[1]->get_ref<const json::string_t&>().find("{{") == 0))) {
+          std::string arg0 =
+              args[0]->is_string() ? args[0]->get_ref<const json::string_t&>() : std::to_string(args[0]->get<double>());
+          std::string arg1 =
+              args[1]->is_string() ? args[1]->get_ref<const json::string_t&>() : std::to_string(args[1]->get<double>());
+          if (arg0.find("{{") == 0)
+            arg0 = arg0.substr(2, arg0.length() - 4);
+          if (arg1.find("{{") == 0)
+            arg1 = arg1.substr(2, arg1.length() - 4);
+          make_result("{{" + arg0 + " % " + arg1 + "}}");
+          break;
+        }
+
       make_result(args[0]->get<const json::number_integer_t>() % args[1]->get<const json::number_integer_t>());
     } break;
     case Op::AtId: {
@@ -2829,7 +2961,6 @@ public:
 } // namespace inja
 
 #endif // INCLUDE_INJA_RENDERER_HPP_
-
 // #include "template.hpp"
 
 // #include "throw.hpp"
@@ -2904,6 +3035,11 @@ public:
   /// Sets the element notation syntax
   void set_search_included_templates_in_files(bool search_in_files) {
     parser_config.search_included_templates_in_files = search_in_files;
+  }
+
+  /// Sets whether missing variables will be ignored during rendering
+  void set_ignore_missing_variables(bool ignore_missing) {
+    render_config.ignore_missing_variables = ignore_missing;
   }
 
   /// Sets whether a missing include will throw an error

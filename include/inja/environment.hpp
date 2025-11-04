@@ -87,6 +87,11 @@ public:
     parser_config.search_included_templates_in_files = search_in_files;
   }
 
+  /// Sets whether missing variables will be ignored during rendering
+  void set_ignore_missing_variables(bool ignore_missing) {
+    render_config.ignore_missing_variables = ignore_missing;
+  }
+
   /// Sets whether a missing include will throw an error
   void set_throw_at_missing_includes(bool will_throw) {
     render_config.throw_at_missing_includes = will_throw;

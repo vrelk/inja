@@ -74,6 +74,7 @@ struct ParserConfig {
  * \brief Class for render configuration.
  */
 struct RenderConfig {
+  bool ignore_missing_variables {false};
   bool throw_at_missing_includes {true};
   bool html_autoescape {false};
 };

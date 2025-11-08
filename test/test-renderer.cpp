@@ -48,6 +48,28 @@ TEST_CASE("types") {
     CHECK_THROWS_WITH(env.render("{{unknown}}", data), "[inja.exception.render_error] (at 1:3) variable 'unknown' not found");
   }
 
+  SUBCASE("ignore missing variables") {
+    auto env_ignore = env;
+    env_ignore.set_ignore_missing_variables(true);
+    
+    // Test simple variable
+    CHECK(env_ignore.render("Hello {{missing}}!", data) == "Hello {{missing}}!");
+    
+    // Test arithmetic with missing variables
+    CHECK(env_ignore.render("{{ missing + 1 }}", data) == "{{missing + 1}}");
+    CHECK(env_ignore.render("{{ 1 + missing }}", data) == "{{1 + missing}}");
+    CHECK(env_ignore.render("{{ age + missing }}", data) == "{{29 + missing}}");
+    CHECK(env_ignore.render("{{ missing + age }}", data) == "{{missing + 29}}");
+    
+    // Test multiple variables and operations
+    CHECK(env_ignore.render("{{ missing1 + missing2 }}", data) == "{{missing1 + missing2}}");
+    CHECK(env_ignore.render("{{ age + missing1 + missing2 }}", data) == "{{29 + missing1 + missing2}}");
+    
+    // Verify normal variables still work
+    CHECK(env_ignore.render("Hello {{ name }}!", data) == "Hello Peter!");
+    CHECK(env_ignore.render("{{ age + 1 }}", data) == "30");
+  }
+
   SUBCASE("comments") {
     CHECK(env.render("Hello{# This is a comment #}!", data) == "Hello!");
     CHECK(env.render("{# --- #Todo --- #}", data) == "");

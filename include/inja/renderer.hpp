@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <iomanip>
 #include <memory>
 #include <numeric>
 #include <ostream>
@@ -94,9 +95,35 @@ class Renderer : public NodeVisitor {
     } else if (value->is_number_integer()) {
       *output_stream << value->get<const json::number_integer_t>();
     } else if (value->is_number_float()) {
-      // Use a stringstream to format the number without trailing zeros
+      const auto val = value->get<const json::number_float_t>();
       std::ostringstream out;
-      out << std::noshowpoint << value->get<const json::number_float_t>();
+      
+      // Handle scientific notation for very small numbers
+      if (std::abs(val) < 0.001) {
+        out << std::scientific << std::setprecision(3) << val;
+        std::string str = out.str();
+        // Convert scientific notation to decimal
+        size_t e_pos = str.find('e');
+        if (e_pos != std::string::npos) {
+          int exponent = std::stoi(str.substr(e_pos + 1));
+          if (exponent < 0) {
+            out.str("");
+            out << std::fixed << std::setprecision(-exponent) << val;
+          }
+        }
+      } else {
+        // Format with a fixed number of decimal places
+        std::string str = value->dump();
+        // If the number has a decimal point, preserve all significant decimals
+        size_t dot_pos = str.find('.');
+        if (dot_pos != std::string::npos) {
+          size_t precision = str.length() - dot_pos - 1;
+          out << std::fixed << std::setprecision(precision) << val;
+        } else {
+          out << std::fixed << std::setprecision(1) << val;
+        }
+      }
+      
       *output_stream << out.str();
     } else if (value->is_null()) {
     } else {
@@ -554,11 +581,14 @@ class Renderer : public NodeVisitor {
     case Op::Round: {
       const auto args = get_arguments<2>(node);
       const auto precision = args[1]->get<const json::number_integer_t>();
-      const double result = std::round(args[0]->get<const json::number_float_t>() * std::pow(10.0, precision)) / std::pow(10.0, precision);
+      const double value = args[0]->get<const json::number_float_t>();
+      const double multiplier = std::pow(10.0, precision);
+      const double rounded = std::round(value * multiplier) / multiplier;
+      
       if (precision == 0) {
-        make_result(static_cast<int>(result));
+        make_result(static_cast<int>(rounded));
       } else {
-        make_result(result);
+        make_result(rounded);
       }
     } break;
     case Op::Sort: {
